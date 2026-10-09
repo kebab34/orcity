@@ -171,8 +171,17 @@ html.skip-intro .intro { display: none; }
 .timeline-sticky { position: sticky; top: 0; height: 100svh; overflow: hidden; display: flex; flex-direction: column; justify-content: center; gap: clamp(2rem, 5vh, 4rem); }
 .timeline-head h2 { font-size: clamp(2.2rem, 5vw, 4.4rem); }
 .timeline-track { display: flex; gap: clamp(1.5rem, 3vw, 3rem); padding: 0 var(--gutter); will-change: transform; }
-.milestone { position: relative; flex: 0 0 clamp(280px, 32vw, 440px); padding-top: 4.4rem; }
-.milestone-year { position: absolute; top: 0; left: 0; font: 700 clamp(2.6rem, 4.5vw, 4rem)/1 var(--font-display); letter-spacing: -.04em; color: transparent; -webkit-text-stroke: 1.5px var(--ink); }
+.milestone { position: relative; flex: 0 0 clamp(280px, 32vw, 440px); padding-top: 5rem; }
+.milestone-year { position: absolute; top: 0; left: 0; display: flex; align-items: baseline; gap: .5rem; font: 600 clamp(2.6rem, 4.5vw, 4rem)/1 var(--font-display); letter-spacing: -.04em; color: var(--ink); }
+.milestone-year .digits { display: flex; }
+.milestone-year .digits > span { display: block; }
+.milestone-year .accent { color: var(--gold); }
+.milestone-year small { font: 500 .9rem var(--font-display); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.milestone-year .digits { align-items: flex-start; }
+.digit { position: relative; display: block; overflow: hidden; height: 1.15em; line-height: 1.15em; -webkit-mask-image: linear-gradient(transparent, #000 22%, #000 78%, transparent); mask-image: linear-gradient(transparent, #000 22%, #000 78%, transparent); }
+.digit-ghost { visibility: hidden; display: block; }
+.digit-roll { position: absolute; left: 0; top: 0; display: flex; flex-direction: column; width: 100%; text-align: center; }
+.digit-roll span { display: block; height: 1.15em; line-height: 1.15em; }
 .milestone-dot { display: block; width: 100%; height: 1px; background: var(--line); position: relative; margin-bottom: 1.6rem; }
 .milestone-dot::before { content: ''; position: absolute; left: 0; top: -6px; width: 13px; height: 13px; border-radius: 50%; background: var(--gold); box-shadow: 0 0 0 6px color-mix(in srgb, var(--gold) 20%, transparent); }
 .milestone h3 { font-size: 1.5rem; margin-bottom: .7rem; }

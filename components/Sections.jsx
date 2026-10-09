@@ -80,6 +80,37 @@ export function Figures() {
 }
 
 /* ---------- Histoire : frise horizontale pilotée par le défilement ---------- */
+
+/** Chiffre qui défile comme un compteur mécanique jusqu'à sa valeur. */
+function Digit({ d, delay, show }) {
+  return (
+    <span className="digit">
+      <motion.span className="digit-roll" initial={{ y: '0%' }} animate={show ? { y: `-${d * 10}%` } : {}} transition={{ duration: 1.4, ease, delay }}>
+        {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => <span key={n}>{n}</span>)}
+      </motion.span>
+      <span className="digit-ghost">{d}</span>
+    </span>
+  );
+}
+
+/** Année (2021) ou durée (10 ans) : chiffres pleins, les deux derniers en doré. */
+function Year({ value }) {
+  const ref = useRef(null);
+  const show = useInView(ref, { once: true, margin: '0px -10% 0px -10%' });
+  const m = value.match(/^(\d+)\s*(.*)$/);
+  const digits = m[1].split('').map(Number);
+  const accentFrom = digits.length === 4 ? 2 : 0;
+  return (
+    <span className="milestone-year" ref={ref} aria-label={value}>
+      <span className="digits" aria-hidden="true">
+        {digits.map((d, i) => (
+          <span key={i} className={i >= accentFrom ? 'accent' : undefined}><Digit d={d} delay={i * 0.08} show={show} /></span>
+        ))}
+      </span>
+      {m[2] && <motion.small aria-hidden="true" initial={{ opacity: 0, x: -8 }} animate={show ? { opacity: 1, x: 0 } : {}} transition={{ duration: 0.8, ease, delay: 0.5 }}>{m[2]}</motion.small>}
+    </span>
+  );
+}
 export function Timeline() {
   const tr = useT();
   const ref = useRef(null);
@@ -99,7 +130,7 @@ export function Timeline() {
         <motion.div className="timeline-track" ref={track} style={{ x }}>
           {tr.timeline.items.map((it, i) => (
             <article className="milestone" key={it.year}>
-              <span className="milestone-year">{it.year}</span>
+              <Year value={it.year} />
               <span className="milestone-dot" />
               <h3>{it.title}</h3>
               <p>{it.text}</p>
