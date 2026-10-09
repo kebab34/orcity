@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { AnimatePresence, motion, useInView } from 'framer-motion';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { geoDistance, geoGraticule10, geoOrthographic, geoPath } from 'd3-geo';
 import { feature } from 'topojson-client';
 import landTopo from 'world-atlas/land-110m.json';
@@ -13,45 +13,58 @@ const R = 270;
 const land = feature(landTopo, landTopo.objects.land);
 const graticule = geoGraticule10();
 const hq = sites.find(s => s.hq);
-const CYCLE = 3800;
+const MAX_TILT = 70;
 
 // Orientation du globe qui place un site au centre (légèrement au-dessus, plus naturel)
 const targetFor = s => [-s.lon, -s.lat + 8];
+const clampTilt = v => Math.max(-MAX_TILT, Math.min(MAX_TILT, v));
+// Plus court chemin en longitude (évite de faire un tour complet)
+const wrapDelta = d => ((((d + 180) % 360) + 360) % 360) - 180;
 
 export default function Globe() {
   const tr = useT();
-  const wrap = useRef(null);
-  const inView = useInView(wrap, { margin: '-15% 0px -15% 0px' });
+  const svgRef = useRef(null);
   const [active, setActive] = useState(0);
-  const [paused, setPaused] = useState(false);
   const [rot, setRot] = useState(() => targetFor(sites[0]));
+  const [touched, setTouched] = useState(false);
   const rotRef = useRef(rot);
+  const anim = useRef({ id: 0, target: null, vx: 0, vy: 0 });
+  const drag = useRef(null);
 
-  // Rotation fluide vers le site actif
-  useEffect(() => {
-    if (!inView) return;
-    const target = targetFor(sites[active]);
+  const apply = useCallback(r => { rotRef.current = r; setRot(r); }, []);
+
+  // Une seule boucle d'animation : soit vers une cible (clic sur une zone), soit l'élan après un glissé
+  const run = useCallback(() => {
+    cancelAnimationFrame(anim.current.id);
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (reduce) { rotRef.current = target; setRot(target); return; }
-    let id;
     const step = () => {
-      const [a, b] = rotRef.current;
-      const na = a + (target[0] - a) * 0.06;
-      const nb = b + (target[1] - b) * 0.06;
-      rotRef.current = [na, nb];
-      setRot([na, nb]);
-      if (Math.abs(target[0] - na) > 0.02 || Math.abs(target[1] - nb) > 0.02) id = requestAnimationFrame(step);
+      const a = anim.current;
+      let [x, y] = rotRef.current;
+      if (a.target) {
+        if (reduce) { apply(a.target); a.target = null; return; }
+        const dx = wrapDelta(a.target[0] - x), dy = a.target[1] - y;
+        x += dx * 0.09; y += dy * 0.09;
+        if (Math.abs(dx) < 0.05 && Math.abs(dy) < 0.05) { apply(a.target); a.target = null; return; }
+      } else {
+        a.vx *= 0.94; a.vy *= 0.94;
+        x += a.vx; y = clampTilt(y + a.vy);
+        if (Math.abs(a.vx) < 0.01 && Math.abs(a.vy) < 0.01) { apply([x, y]); return; }
+      }
+      apply([x, y]);
+      a.id = requestAnimationFrame(step);
     };
-    id = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(id);
-  }, [active, inView]);
+    anim.current.id = requestAnimationFrame(step);
+  }, [apply]);
 
-  // Visite automatique des implantations, interrompue au survol
-  useEffect(() => {
-    if (!inView || paused) return;
-    const id = setTimeout(() => setActive(a => (a + 1) % sites.length), CYCLE);
-    return () => clearTimeout(id);
-  }, [active, inView, paused]);
+  useEffect(() => () => cancelAnimationFrame(anim.current.id), []);
+
+  const goTo = useCallback(i => {
+    setActive(i);
+    setTouched(true);
+    anim.current.vx = anim.current.vy = 0;
+    anim.current.target = targetFor(sites[i]);
+    run();
+  }, [run]);
 
   const { path, projection } = useMemo(() => {
     const projection = geoOrthographic().scale(R).translate([SIZE / 2, SIZE / 2]).rotate(rot).clipAngle(90).precision(0.6);
@@ -63,9 +76,57 @@ export default function Globe() {
   const current = sites[active];
   const [cx, cy] = projection([current.lon, current.lat]);
 
+  // ----- Glisser pour faire tourner (souris et tactile) -----
+  const toSvg = e => {
+    const r = svgRef.current.getBoundingClientRect();
+    return [((e.clientX - r.left) / r.width) * SIZE, ((e.clientY - r.top) / r.height) * SIZE];
+  };
+  const onDown = e => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    cancelAnimationFrame(anim.current.id);
+    anim.current.target = null;
+    const [x, y] = toSvg(e);
+    drag.current = { x, y, startX: x, startY: y, t: performance.now(), moved: 0 };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setTouched(true);
+  };
+  const onMove = e => {
+    const d = drag.current;
+    if (!d) return;
+    const [x, y] = toSvg(e);
+    const k = 0.32; // degrés par unité SVG
+    const dx = (x - d.x) * k, dy = (y - d.y) * k;
+    const now = performance.now(), dt = Math.max(now - d.t, 1);
+    anim.current.vx = (dx / dt) * 16;
+    anim.current.vy = (-dy / dt) * 16;
+    d.x = x; d.y = y; d.t = now;
+    d.moved = Math.max(d.moved, Math.hypot(x - d.startX, y - d.startY));
+    const [rx, ry] = rotRef.current;
+    apply([rx + dx, clampTilt(ry - dy)]);
+  };
+  const onUp = e => {
+    const d = drag.current;
+    drag.current = null;
+    if (!d) return;
+    if (d.moved < 6) {
+      // Simple toucher : on cherche la zone la plus proche du doigt
+      const [x, y] = toSvg(e);
+      let best = -1, bestDist = 34;
+      sites.forEach((s, i) => {
+        if (!visible(s)) return;
+        const [px, py] = projection([s.lon, s.lat]);
+        const dist = Math.hypot(px - x, py - y);
+        if (dist < bestDist) { best = i; bestDist = dist; }
+      });
+      if (best >= 0) goTo(best);
+      return;
+    }
+    if (performance.now() - d.t > 80) anim.current.vx = anim.current.vy = 0; // doigt immobile avant de lâcher : pas d'élan
+    run();
+  };
+
   const france = sites.filter(s => ['castelnau', 'paris', 'cannes'].includes(s.id));
   const abroad = sites.filter(s => !france.includes(s));
-  const choose = s => { setActive(sites.indexOf(s)); setPaused(true); };
 
   return (
     <section className="section section-dark world" id="international">
@@ -74,31 +135,38 @@ export default function Globe() {
           <span className="eyebrow">{tr.world.eyebrow}</span>
           <Lines lines={tr.world.title} />
           <FadeUp as="p" className="lead">{tr.world.lead}</FadeUp>
-          <div onMouseLeave={() => setPaused(false)}>
-            {[[tr.world.france, france], [tr.world.international, abroad]].map(([label, list]) => (
-              <FadeUp className="site-group" key={label}>
-                <h3>{label}</h3>
-                <ul>
-                  {list.map(s => {
-                    const on = sites[active].id === s.id;
-                    return (
-                      <li key={s.id}>
-                        <button className={on ? 'on' : ''} onMouseEnter={() => choose(s)} onFocus={() => choose(s)} onClick={() => choose(s)}>
-                          <b>{tr.world.sites[s.id].name}</b>
-                          <span>{tr.world.sites[s.id].detail}</span>
-                          {on && !paused && <motion.i className="site-timer" key={`t-${active}`} initial={{ scaleX: 0 }} animate={{ scaleX: 1 }} transition={{ duration: CYCLE / 1000, ease: 'linear' }} />}
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </FadeUp>
-            ))}
-          </div>
+          {[[tr.world.france, france], [tr.world.international, abroad]].map(([label, list]) => (
+            <FadeUp className="site-group" key={label}>
+              <h3>{label}</h3>
+              <ul>
+                {list.map(s => {
+                  const i = sites.indexOf(s);
+                  return (
+                    <li key={s.id}>
+                      <button className={active === i ? 'on' : ''} onClick={() => goTo(i)} aria-pressed={active === i}>
+                        <b>{tr.world.sites[s.id].name}</b>
+                        <span>{tr.world.sites[s.id].detail}</span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </FadeUp>
+          ))}
         </div>
 
-        <motion.div className="globe" ref={wrap} initial={{ opacity: 0, scale: 0.9 }} whileInView={{ opacity: 1, scale: 1 }} viewport={{ once: true }} transition={{ duration: 1.4, ease }}>
-          <svg viewBox={`0 0 ${SIZE} ${SIZE}`} role="img" aria-label={tr.world.title.join(' ')}>
+        <motion.div className="globe" initial={{ opacity: 0, scale: 0.9 }} whileInView={{ opacity: 1, scale: 1 }} viewport={{ once: true }} transition={{ duration: 1.4, ease }}>
+          <svg
+            ref={svgRef}
+            viewBox={`0 0 ${SIZE} ${SIZE}`}
+            role="img"
+            aria-label={tr.world.title.join(' ')}
+            data-lenis-prevent
+            onPointerDown={onDown}
+            onPointerMove={onMove}
+            onPointerUp={onUp}
+            onPointerCancel={() => { drag.current = null; }}
+          >
             <defs>
               <radialGradient id="g-sphere" cx="38%" cy="32%" r="75%">
                 <stop offset="0%" stopColor="#2a2c31" />
@@ -119,12 +187,12 @@ export default function Globe() {
               <path key={s.id} d={path({ type: 'LineString', coordinates: [[hq.lon, hq.lat], [s.lon, s.lat]] }) || ''} pathLength="1" className={`route ${current.id === s.id ? 'on' : ''}`} />
             ))}
 
-            {sites.map(s => {
+            {sites.map((s, i) => {
               if (!visible(s)) return null;
               const [x, y] = projection([s.lon, s.lat]);
-              const on = current.id === s.id;
+              const on = active === i;
               return (
-                <g key={s.id} className={`pin ${s.hq ? 'hq' : ''} ${on ? 'on' : ''}`} onMouseEnter={() => choose(s)}>
+                <g key={s.id} className={`pin ${s.hq ? 'hq' : ''} ${on ? 'on' : ''}`}>
                   {on && <circle cx={x} cy={y} r="9" className="pin-ring" />}
                   <circle cx={x} cy={y} r={s.hq ? 5.5 : 4} className="pin-dot" />
                 </g>
@@ -132,8 +200,7 @@ export default function Globe() {
             })}
           </svg>
 
-          {/* Étiquette du site actif, posée sur le globe */}
-          <AnimatePresence mode="wait">
+          <AnimatePresence>
             {visible(current) && (
               <motion.div
                 key={current.id}
@@ -142,7 +209,7 @@ export default function Globe() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                transition={{ duration: 0.35 }}
+                transition={{ duration: 0.3 }}
               >
                 <motion.div className="globe-tag" initial={{ y: 10 }} animate={{ y: 0 }} transition={{ duration: 0.45, ease }}>
                   <b>{tr.world.sites[current.id].name}</b>
@@ -151,7 +218,15 @@ export default function Globe() {
               </motion.div>
             )}
           </AnimatePresence>
-          <div className="globe-count"><b>{String(active + 1).padStart(2, '0')}</b> / {String(sites.length).padStart(2, '0')}</div>
+
+          <AnimatePresence>
+            {!touched && (
+              <motion.div className="globe-hint" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }} transition={{ duration: 0.5, ease }}>
+                <span className="globe-hint-icon" aria-hidden="true">↔</span>
+                {tr.world.drag}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </motion.div>
       </div>
     </section>
